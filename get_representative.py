@@ -11,6 +11,7 @@ def main(args):
     pangolin_output = args.get('<pangolin_output>', 'lineages.csv')
     embl_seqs = args.get('<embl_seqs>', 'seqs_embl_covid18.tsv')
 
+    inclusion_accessions = ['MT929124', 'MZ009837']
 
     lineages = pd.read_csv(pangolin_output)
     lineages = (
@@ -33,15 +34,21 @@ def main(args):
 
     rep_seqs = (joined
         .pipe(create_date_col)
+        .pipe(include, inclusion_accessions)
         .pipe(remove_failed)
         .pipe(remove_older_than, 2019_12_20)
+        .pipe(exclude_ambiguous_dates)
         .pipe(remove_coverage_under, 98.0)
+        .pipe(keep_most_supported_vocs)
         .pipe(earliest_date_per_lineage)
         .pipe(drop_lineage_none)
+        .pipe(lambda x: x.sort_values(['scorpio_call', 'lineage']))
     )
-    print(rep_seqs)
+    # print(rep_seqs.columns)
+    # print(rep_seqs)
     keep_cols = [
         'accession_id',
+        'cross_references',
         'date',
         'country',
         'lineage',
@@ -51,6 +58,7 @@ def main(args):
         'scorpio_conflict',
         'coverage',
         'pangolin_version',
+        'note',
     ]
 
     # import pdb; pdb.set_trace()
@@ -89,6 +97,28 @@ def remove_older_than(df: pd.DataFrame, date: int):
     # Remove sequences with a spurious collection date of before the outbreak
     df2 = df.copy()[~df.collection_date.isna()]
     return df2[df2.collection_date.astype(int) > date]
+
+
+def keep_most_supported_vocs(df):
+    voc_rows = ~df.scorpio_support.isna()
+    vocs = df.copy()[voc_rows]
+    rest = df.copy()[~voc_rows]
+    top_vocs = vocs.sort_values('scorpio_support', ascending=False).groupby('lineage').head(1)
+    # top_rest = rest.sort_values('ambiguity_score', ascending=False).groupby('lineage').head(1)
+    return pd.concat([top_vocs, rest])
+
+
+def include(df, accessions: list[str]):
+    inclusion_rows = df.accession_id.isin(accessions)
+    inclusion_df = df.copy()[inclusion_rows]
+
+    lineages_to_remove = df[inclusion_rows].lineage.tolist()
+    filtered_df = df.copy()[~df.lineage.isin(lineages_to_remove)]
+    return pd.concat([inclusion_df, filtered_df])
+
+
+def exclude_ambiguous_dates(df):
+    return df.copy()[~df.date.str.endswith('XX')]
 
 
 def earliest_date_per_lineage(df):
